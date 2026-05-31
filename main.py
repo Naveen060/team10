@@ -50,6 +50,11 @@ def update_task_status(task_id, status):
     save_tasks(tasks)
 
 
+def delete_task(task_id):
+    tasks = [task for task in load_tasks() if task["id"] != task_id]
+    save_tasks(tasks)
+
+
 def metrics(tasks):
     total = len(tasks)
     done = sum(task["status"] == "done" for task in tasks)
@@ -83,10 +88,12 @@ def main():
         return
 
     status_filter = st.selectbox("Filter by status", ["all", "todo", "in-progress", "done"])
+    export_bytes = json.dumps(tasks, indent=2).encode("utf-8")
+    st.download_button("Export Sprint JSON", data=export_bytes, file_name="team10_tasks.json", mime="application/json")
     filtered = [task for task in tasks if status_filter == "all" or task["status"] == status_filter]
 
     for task in filtered:
-        col1, col2, col3 = st.columns([4, 2, 2])
+        col1, col2, col3, col4 = st.columns([4, 2, 2, 1.5])
         with col1:
             st.markdown(f"**{task['title']}**")
             st.caption(f"Owner: {task['owner']} | Priority: {task['priority']}")
@@ -100,6 +107,10 @@ def main():
         with col3:
             if new_status != task["status"] and st.button(f"Update {task['id'][:8]}"):
                 update_task_status(task["id"], new_status)
+                st.rerun()
+        with col4:
+            if st.button(f"Delete {task['id'][:8]}"):
+                delete_task(task["id"])
                 st.rerun()
         st.divider()
 

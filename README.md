@@ -9,6 +9,8 @@ This repository is now a lightweight Streamlit-based team sprint dashboard inste
 - Track `todo`, `in-progress`, and `done` states
 - View task metrics at the top of the dashboard
 - Persist task data locally in JSON
+- Export the task board as JSON
+- Delete tasks directly from the dashboard
 
 ## Run
 
