@@ -1,114 +1,104 @@
-import json
-from datetime import datetime
-from pathlib import Path
-from uuid import uuid4
+import csv
+import io
+from datetime import date
 
 import streamlit as st
 
-
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-TASKS_FILE = DATA_DIR / "tasks.json"
+from team10_board.services import VALID_PRIORITIES, VALID_STATUSES, compute_metrics, delete_task, load_tasks, save_task, update_task
 
 
-def ensure_storage():
-    DATA_DIR.mkdir(exist_ok=True)
-    if not TASKS_FILE.exists():
-        TASKS_FILE.write_text("[]", encoding="utf-8")
-
-
-def load_tasks():
-    ensure_storage()
-    return json.loads(TASKS_FILE.read_text(encoding="utf-8"))
-
-
-def save_tasks(tasks):
-    TASKS_FILE.write_text(json.dumps(tasks, indent=2), encoding="utf-8")
-
-
-def add_task(title, owner, priority):
-    tasks = load_tasks()
-    tasks.append(
-        {
-            "id": str(uuid4()),
-            "title": title,
-            "owner": owner,
-            "priority": priority,
-            "status": "todo",
-            "created_at": datetime.utcnow().isoformat(),
-        }
+def export_csv(tasks: list[dict]) -> bytes:
+    buffer = io.StringIO()
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=["title", "owner", "priority", "status", "due_date", "sprint", "created_at", "updated_at"],
     )
-    save_tasks(tasks)
-
-
-def update_task_status(task_id, status):
-    tasks = load_tasks()
-    for task in tasks:
-        if task["id"] == task_id:
-            task["status"] = status
-            break
-    save_tasks(tasks)
-
-
-def delete_task(task_id):
-    tasks = [task for task in load_tasks() if task["id"] != task_id]
-    save_tasks(tasks)
-
-
-def metrics(tasks):
-    total = len(tasks)
-    done = sum(task["status"] == "done" for task in tasks)
-    in_progress = sum(task["status"] == "in-progress" for task in tasks)
-    return total, in_progress, done
+    writer.writeheader()
+    writer.writerows(tasks)
+    return buffer.getvalue().encode("utf-8")
 
 
 def main():
     st.set_page_config(page_title="Team10 Sprint Board", layout="wide")
     st.title("Team10 Sprint Board")
-    st.caption("A lightweight local sprint dashboard for small teams.")
+    st.caption("A lightweight local sprint command center for small teams and student product squads.")
 
     with st.sidebar:
         st.header("Add Task")
         title = st.text_input("Task title")
         owner = st.text_input("Owner", value="Team Member")
-        priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+        priority = st.selectbox("Priority", VALID_PRIORITIES, index=2)
+        due_date = st.date_input("Due date", value=date.today())
+        sprint = st.text_input("Sprint", value="Sprint 1")
         if st.button("Create Task", type="primary") and title.strip():
-            add_task(title.strip(), owner.strip() or "Team Member", priority)
+            save_task(
+                title.strip(),
+                owner.strip() or "Team Member",
+                priority,
+                due_date.isoformat(),
+                sprint.strip() or "Sprint 1",
+            )
             st.success("Task created.")
 
     tasks = load_tasks()
-    total, in_progress, done = metrics(tasks)
-    a, b, c = st.columns(3)
-    a.metric("Total Tasks", total)
-    b.metric("In Progress", in_progress)
-    c.metric("Done", done)
+    metrics = compute_metrics(tasks)
+    a, b, c, d, e = st.columns(5)
+    a.metric("Total Tasks", metrics["total"])
+    b.metric("In Progress", metrics["in_progress"])
+    c.metric("Blocked", metrics["blocked"])
+    d.metric("Done", metrics["done"])
+    e.metric("Overdue", metrics["overdue"])
 
     if not tasks:
         st.info("No tasks yet. Add one from the sidebar.")
         return
 
-    status_filter = st.selectbox("Filter by status", ["all", "todo", "in-progress", "done"])
-    export_bytes = json.dumps(tasks, indent=2).encode("utf-8")
-    st.download_button("Export Sprint JSON", data=export_bytes, file_name="team10_tasks.json", mime="application/json")
-    filtered = [task for task in tasks if status_filter == "all" or task["status"] == status_filter]
+    col_a, col_b, col_c = st.columns([1.4, 1.4, 2.2])
+    with col_a:
+        status_filter = st.selectbox("Filter by status", ["all", *VALID_STATUSES])
+    with col_b:
+        sprint_filter = st.selectbox("Filter by sprint", ["all", *sorted({task.get("sprint", "Sprint 1") for task in tasks})])
+    with col_c:
+        search = st.text_input("Search by title or owner")
+
+    export_bytes = export_csv(tasks)
+    st.download_button("Export Sprint CSV", data=export_bytes, file_name="team10_tasks.csv", mime="text/csv")
+    filtered = [
+        task
+        for task in tasks
+        if (status_filter == "all" or task["status"] == status_filter)
+        and (sprint_filter == "all" or task.get("sprint", "Sprint 1") == sprint_filter)
+        and (
+            not search.strip()
+            or search.strip().lower() in task["title"].lower()
+            or search.strip().lower() in task["owner"].lower()
+        )
+    ]
 
     for task in filtered:
-        col1, col2, col3, col4 = st.columns([4, 2, 2, 1.5])
+        col1, col2, col3, col4, col5 = st.columns([4, 2, 2, 2, 1.5])
         with col1:
             st.markdown(f"**{task['title']}**")
-            st.caption(f"Owner: {task['owner']} | Priority: {task['priority']}")
+            st.caption(
+                f"Owner: {task['owner']} | Priority: {task['priority']} | Sprint: {task.get('sprint', 'Sprint 1')} | Due: {task.get('due_date', 'n/a')}"
+            )
         with col2:
             new_status = st.selectbox(
                 f"Status {task['id']}",
-                ["todo", "in-progress", "done"],
-                index=["todo", "in-progress", "done"].index(task["status"]),
+                VALID_STATUSES,
+                index=VALID_STATUSES.index(task["status"]),
                 label_visibility="collapsed",
             )
         with col3:
             if new_status != task["status"] and st.button(f"Update {task['id'][:8]}"):
-                update_task_status(task["id"], new_status)
+                update_task(task["id"], status=new_status)
                 st.rerun()
         with col4:
+            new_owner = st.text_input(f"Owner {task['id']}", value=task["owner"], label_visibility="collapsed")
+            if new_owner != task["owner"] and st.button(f"Reassign {task['id'][:8]}"):
+                update_task(task["id"], owner=new_owner.strip() or task["owner"])
+                st.rerun()
+        with col5:
             if st.button(f"Delete {task['id'][:8]}"):
                 delete_task(task["id"])
                 st.rerun()
